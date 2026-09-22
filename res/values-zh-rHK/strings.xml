@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gboard Termux 中文輸入支援</string>
+    <string name="app_desc">在 Gboard 端偽裝 InputType，徹底解鎖 Termux 中文輸入與輸入法切換</string>
+</resources>

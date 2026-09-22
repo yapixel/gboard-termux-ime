@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gboard Termux 다국어 입력 지원</string>
+    <string name="app_desc">Gboard 측에서 InputType을 위장하여 Termux의 한글·중국어 입력 및 전환 활성화</string>
+</resources>

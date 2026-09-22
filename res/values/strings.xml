@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gboard Termux Chinese IME</string>
+    <string name="app_desc">Unlock Chinese and multilingual IME for Termux by spoofing InputType in Gboard</string>
+</resources>

@@ -1,0 +1,6 @@
+/build/
+/build-local/
+/*.apk
+/*.idsig
+/libs/android.jar
+/debug.keystore
