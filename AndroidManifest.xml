@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.midori.gboard.termux"
-    android:versionCode="5"
-    android:versionName="1.3.1">
+    android:versionCode="8"
+    android:versionName="1.3.4">
 
     <uses-sdk
         android:minSdkVersion="26"
@@ -19,7 +19,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="Chinese IME support for Termux; English EditorInfo and Gboard engine behavior are left untouched" />
+            android:value="Chinese composing for Termux with raw English input and no private Gboard engine hooks" />
         <meta-data
             android:name="xposedminversion"
             android:value="100" />

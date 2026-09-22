@@ -4,15 +4,23 @@
 
 进入 Termux 时模块可切换到英文键盘，离开后恢复此前的输入语言；在 Termux 内切换到中文时，它会把 `EditorInfo` 恢复为标准文本输入，使 Gboard 拼音候选和中文上屏正常工作。
 
-## 1.3.1 修复
+## 1.3.4 修复
 
 1.3.0 会在英文模式把 Termux 伪装成 `com.android.virtualization.terminal`，并拦截所有形如 `LatinIme(EditorInfo) -> boolean` 的 Gboard 内部方法。这依赖 Gboard 私有实现，在部分 ROM/Gboard 组合中会延迟最后一个字符，例如输入 `cd ..` 后只提交 `cd .`，剩余的 `.` 在下一次提交时出现。
 
-1.3.1 删除了这两个英文干预点：
+1.3.4 删除了这两个英文干预点，并修复了中文输入引擎未真正切换的问题：
 
-- 英文输入完全保留 Gboard 和 Termux 原生的 `EditorInfo` 行为。
-- 中文输入仍使用标准文本输入类型，保留候选词和中文上屏支持。
+- 保留真实的 Termux 包名，不再触发 Gboard 的虚拟终端私有路径。
+- 英文完整恢复 Termux 原始 `EditorInfo` 和原始 `InputConnection`，所有命令均走终端的逐字符输入路径；`cd ..`、`cd ../../../` 只是回归样例，并非命令特判。
+- 切换中文时临时使用标准文本 `EditorInfo` 并重启当前输入会话，使 Gboard 离开 `PasswordIme`。
+- 中文输入可使用 composing text、拼音候选和中文上屏。
 - 进入 Termux 自动切英文、离开恢复原语言的状态机保持不变。
+
+Termux 的 `~/.termux/termux.properties` 应设置：
+
+```properties
+enforce-char-based-input = false
+```
 
 ## 安装
 

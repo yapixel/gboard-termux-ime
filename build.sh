@@ -35,10 +35,10 @@ with zipfile.ZipFile(out / "base.apk") as source, zipfile.ZipFile(out / "unalign
     target.writestr("META-INF/xposed/module.prop", "minApiVersion=100\ntargetApiVersion=102\nstaticScope=false\n")
 PY
 
-"$build_tools/zipalign" -f 4 "$out/unaligned.apk" "$out/Gboard-Termux-IME-1.3.1-unsigned.apk"
+"$build_tools/zipalign" -f 4 "$out/unaligned.apk" "$out/Gboard-Termux-IME-1.3.4-unsigned.apk"
 
 if [[ -n "${KEYSTORE:-}" ]]; then
   "$build_tools/apksigner" sign --ks "$KEYSTORE" \
     --ks-pass "${KS_PASS:?Set KS_PASS}" --ks-key-alias "${KS_ALIAS:?Set KS_ALIAS}" \
-    --out "$out/Gboard-Termux-IME-1.3.1.apk" "$out/Gboard-Termux-IME-1.3.1-unsigned.apk"
+    --out "$out/Gboard-Termux-IME-1.3.4.apk" "$out/Gboard-Termux-IME-1.3.4-unsigned.apk"
 fi

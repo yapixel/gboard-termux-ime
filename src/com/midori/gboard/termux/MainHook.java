@@ -6,6 +6,7 @@ import android.provider.Settings;
 import android.text.InputType;
 import android.util.Log;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.InputMethodSubtype;
@@ -32,6 +33,8 @@ public class MainHook extends XposedModule {
     private volatile boolean mTerminalExited = false;
     private volatile boolean mIsProgrammaticSwitch = false;
     private volatile String mOriginalTerminalPkg = "com.termux";
+    private volatile int mOriginalInputType = InputType.TYPE_NULL;
+    private volatile int mOriginalImeOptions = 0;
     private volatile String mLastPackage = null;
     private volatile String mImeId = null;
 
@@ -111,14 +114,20 @@ public class MainHook extends XposedModule {
                                 }
                             }
                             Object thisObj = chain.getThisObject();
-                            if (thisObj instanceof InputMethodService) {
-                                EditorInfo currentInfo = ((InputMethodService) thisObj).getCurrentInputEditorInfo();
+                            InputMethodService service = (thisObj instanceof InputMethodService)
+                                    ? (InputMethodService) thisObj : null;
+                            if (service != null) {
+                                EditorInfo currentInfo = service.getCurrentInputEditorInfo();
                                 if (currentInfo != null && (isTargetTerminalApp(currentInfo.packageName) || mInTerminalSession)) {
                                     mInTerminalSession = true;
                                     spoofEditorInfoIfTerminal(currentInfo, thisObj, true);
                                 }
                             }
-                            return chain.proceed();
+                            Object result = chain.proceed();
+                            if (service != null && mInTerminalSession) {
+                                restartCurrentInput(service);
+                            }
+                            return result;
                         } else if ("onStartInput".equals(name)) {
                             Object arg0 = chain.getArg(0);
                             boolean isRestarting = false;
@@ -199,6 +208,10 @@ public class MainHook extends XposedModule {
 
             if (enteringTerminal && service != null) {
                 Log.i(TAG, "Entering terminal app: " + currentPkg + " (previous: " + mLastPackage + ", restarting=" + restarting + ")");
+
+                mOriginalTerminalPkg = currentPkg;
+                mOriginalInputType = info.inputType;
+                mOriginalImeOptions = info.imeOptions;
 
                 InputMethodSubtype curSubtype = getCurrentSubtype(service);
                 // 1. 若从外部应用切入且当前非英文，固化记录外部应用的最后语言状态
@@ -289,6 +302,22 @@ public class MainHook extends XposedModule {
             }
         } finally {
             mIsProgrammaticSwitch = false;
+        }
+    }
+
+    private void restartCurrentInput(InputMethodService service) {
+        try {
+            InputConnection connection = service.getCurrentInputConnection();
+            EditorInfo info = service.getCurrentInputEditorInfo();
+            if (connection == null || info == null) return;
+
+            Object inputMethod = service.onCreateInputMethodInterface();
+            Method restartInput = inputMethod.getClass().getMethod(
+                    "restartInput", InputConnection.class, EditorInfo.class);
+            restartInput.invoke(inputMethod, connection, info);
+            Log.i(TAG, "Restarted current Termux input for " + getSubtypeDesc(mLastSubtype));
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to restart current Termux input", t);
         }
     }
 
@@ -481,20 +510,21 @@ public class MainHook extends XposedModule {
             } catch (Throwable ignored) {}
         }
 
+        // Keep Termux's raw editor in English so punctuation is committed immediately.
+        // Chinese needs an ordinary text editor plus restartInput to activate composing.
+        info.packageName = (mOriginalTerminalPkg != null) ? mOriginalTerminalPkg : "com.termux";
         boolean isChinese = isChineseSubtype(subtype);
-
         if (isChinese) {
-            // 中文模式：还原为真实终端包名，提供标准文本输入类型，让拼音输入法引擎完全正常展示候选词条与选词上屏
-            info.packageName = (mOriginalTerminalPkg != null) ? mOriginalTerminalPkg : "com.termux";
-            info.inputType = InputType.TYPE_CLASS_TEXT
-                           | InputType.TYPE_TEXT_VARIATION_NORMAL;
-            // 确保清除 NO_SUGGESTIONS 标志
-            info.inputType &= ~InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
-            info.imeOptions |= EditorInfo.IME_FLAG_NO_FULLSCREEN;
-            if (logVerbose) {
-                Log.i(TAG, "Gboard: [CHINESE MODE] Restored EditorInfo for " + info.packageName
-                        + " (" + getSubtypeDesc(subtype) + "): inputType=0x" + Integer.toHexString(info.inputType));
-            }
+            info.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_NORMAL;
+            info.imeOptions = mOriginalImeOptions | EditorInfo.IME_FLAG_NO_FULLSCREEN;
+        } else {
+            info.inputType = mOriginalInputType;
+            info.imeOptions = mOriginalImeOptions;
+        }
+
+        if (isChinese && logVerbose) {
+            Log.i(TAG, "Gboard: [CHINESE MODE] Restored EditorInfo for " + info.packageName
+                    + " (" + getSubtypeDesc(subtype) + "): inputType=0x" + Integer.toHexString(info.inputType));
         }
     }
 }
