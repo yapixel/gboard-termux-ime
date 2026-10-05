@@ -15,6 +15,6 @@ assert "SafeBacktickInputConnection" in source
 assert "KEYCODE_GRAVE" in source
 assert "super.commitText(text, 1)" in source
 assert "super.commitText(text, newCursorPosition)" in source
-assert "sLastBacktickTime" in source
-assert "setSelection(start + 1, end + 1)" in source
+assert "sLastBacktickTime < 500" in source
+assert "KEYCODE_DPAD_LEFT" in source
 print("source checks passed")

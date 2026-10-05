@@ -543,11 +543,17 @@ public class MainHook extends XposedModule {
 
         @Override
         public boolean sendKeyEvent(KeyEvent event) {
-            if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_GRAVE) {
-                if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                    commitText("`", 1);
+            if (event != null) {
+                if (event.getKeyCode() == KeyEvent.KEYCODE_GRAVE) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                        commitText("`", 1);
+                    }
+                    return true;
                 }
-                return true;
+                if (event.getKeyCode() == KeyEvent.KEYCODE_DPAD_LEFT
+                        && System.currentTimeMillis() - sLastBacktickTime < 500) {
+                    return true;
+                }
             }
             return super.sendKeyEvent(event);
         }
@@ -555,9 +561,10 @@ public class MainHook extends XposedModule {
         @Override
         public boolean setComposingText(CharSequence text, int newCursorPosition) {
             if (text != null && isAllBackticks(text)) {
-                boolean result = commitText(text, 1);
-                finishComposingText();
-                return result;
+                return commitText(text, 1);
+            }
+            if ((text == null || text.length() == 0) && System.currentTimeMillis() - sLastBacktickTime < 500) {
+                return super.finishComposingText();
             }
             return super.setComposingText(text, newCursorPosition);
         }
@@ -567,30 +574,28 @@ public class MainHook extends XposedModule {
             if (text != null && isAllBackticks(text)) {
                 sLastBacktickTime = System.currentTimeMillis();
                 boolean res = super.commitText(text, 1);
-                finishComposingText();
+                super.finishComposingText();
                 return res;
+            }
+            if ((text == null || text.length() == 0) && System.currentTimeMillis() - sLastBacktickTime < 500) {
+                return super.finishComposingText();
             }
             return super.commitText(text, newCursorPosition);
         }
 
         @Override
         public boolean setSelection(int start, int end) {
-            if (System.currentTimeMillis() - sLastBacktickTime < 150 && start == end) {
-                try {
-                    CharSequence after = getTextAfterCursor(1, 0);
-                    if (after != null && after.length() > 0 && after.charAt(0) == '`') {
-                        return super.setSelection(start + 1, end + 1);
-                    }
-                } catch (Throwable ignored) {}
+            if (System.currentTimeMillis() - sLastBacktickTime < 500) {
+                return true;
             }
             return super.setSelection(start, end);
         }
 
         @Override
         public boolean setComposingRegion(int start, int end) {
-            if (System.currentTimeMillis() - sLastBacktickTime < 150) {
+            if (System.currentTimeMillis() - sLastBacktickTime < 500) {
                 try {
-                    finishComposingText();
+                    super.finishComposingText();
                     return true;
                 } catch (Throwable ignored) {}
             }
