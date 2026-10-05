@@ -13,4 +13,8 @@ assert "!isTargetTerminalApp(pkg) && !mInTerminalSession" not in source
 assert "isTargetTerminalApp(info.packageName) || mInTerminalSession" not in source
 assert "SafeBacktickInputConnection" in source
 assert "KEYCODE_GRAVE" in source
+assert "super.commitText(text, 1)" in source
+assert "super.commitText(text, newCursorPosition)" in source
+assert "sLastBacktickTime" in source
+assert "setSelection(start + 1, end + 1)" in source
 print("source checks passed")

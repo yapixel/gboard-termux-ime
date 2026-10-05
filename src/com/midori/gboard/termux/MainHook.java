@@ -535,6 +535,8 @@ public class MainHook extends XposedModule {
     }
 
     private static class SafeBacktickInputConnection extends InputConnectionWrapper {
+        private static volatile long sLastBacktickTime = 0;
+
         public SafeBacktickInputConnection(InputConnection target) {
             super(target, true);
         }
@@ -542,7 +544,7 @@ public class MainHook extends XposedModule {
         @Override
         public boolean sendKeyEvent(KeyEvent event) {
             if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_GRAVE) {
-                if (event.getAction() == KeyEvent.ACTION_UP) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) {
                     commitText("`", 1);
                 }
                 return true;
@@ -553,11 +555,46 @@ public class MainHook extends XposedModule {
         @Override
         public boolean setComposingText(CharSequence text, int newCursorPosition) {
             if (text != null && isAllBackticks(text)) {
+                boolean result = commitText(text, 1);
                 finishComposingText();
-                commitText(text, newCursorPosition);
-                return true;
+                return result;
             }
             return super.setComposingText(text, newCursorPosition);
+        }
+
+        @Override
+        public boolean commitText(CharSequence text, int newCursorPosition) {
+            if (text != null && isAllBackticks(text)) {
+                sLastBacktickTime = System.currentTimeMillis();
+                boolean res = super.commitText(text, 1);
+                finishComposingText();
+                return res;
+            }
+            return super.commitText(text, newCursorPosition);
+        }
+
+        @Override
+        public boolean setSelection(int start, int end) {
+            if (System.currentTimeMillis() - sLastBacktickTime < 150 && start == end) {
+                try {
+                    CharSequence after = getTextAfterCursor(1, 0);
+                    if (after != null && after.length() > 0 && after.charAt(0) == '`') {
+                        return super.setSelection(start + 1, end + 1);
+                    }
+                } catch (Throwable ignored) {}
+            }
+            return super.setSelection(start, end);
+        }
+
+        @Override
+        public boolean setComposingRegion(int start, int end) {
+            if (System.currentTimeMillis() - sLastBacktickTime < 150) {
+                try {
+                    finishComposingText();
+                    return true;
+                } catch (Throwable ignored) {}
+            }
+            return super.setComposingRegion(start, end);
         }
 
         private static boolean isAllBackticks(CharSequence cs) {
