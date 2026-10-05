@@ -199,6 +199,8 @@ public class MainHook extends XposedModule {
     private void handleStartInput(EditorInfo info, boolean restarting, InputMethodService service) {
         if (info == null) return;
         String currentPkg = info.packageName;
+        Log.i(TAG, "handleStartInput: pkg=" + currentPkg + " inputType=0x" + Integer.toHexString(info.inputType)
+                + " imeOptions=0x" + Integer.toHexString(info.imeOptions) + " restarting=" + restarting);
 
         if (isTargetTerminalApp(currentPkg)) {
             // 目标为终端类应用（Termux）
@@ -531,6 +533,7 @@ public class MainHook extends XposedModule {
         if (ic == null || ic instanceof SafeBacktickInputConnection) {
             return ic;
         }
+        Log.i(TAG, "Wrapping InputConnection: " + ic.getClass().getName());
         return new SafeBacktickInputConnection(ic);
     }
 
@@ -543,6 +546,7 @@ public class MainHook extends XposedModule {
 
         @Override
         public boolean sendKeyEvent(KeyEvent event) {
+            Log.i(TAG, "IC.sendKeyEvent: " + event);
             if (event != null) {
                 if (event.getKeyCode() == KeyEvent.KEYCODE_GRAVE) {
                     if (event.getAction() == KeyEvent.ACTION_DOWN) {
@@ -552,6 +556,7 @@ public class MainHook extends XposedModule {
                 }
                 if (event.getKeyCode() == KeyEvent.KEYCODE_DPAD_LEFT
                         && System.currentTimeMillis() - sLastBacktickTime < 500) {
+                    Log.i(TAG, "IC.sendKeyEvent: suppressed DPAD_LEFT after backtick");
                     return true;
                 }
             }
@@ -560,10 +565,12 @@ public class MainHook extends XposedModule {
 
         @Override
         public boolean setComposingText(CharSequence text, int newCursorPosition) {
+            Log.i(TAG, "IC.setComposingText: text=" + text + " pos=" + newCursorPosition);
             if (text != null && isAllBackticks(text)) {
-                return commitText(text, 1);
+                return commitText("`", 1);
             }
             if ((text == null || text.length() == 0) && System.currentTimeMillis() - sLastBacktickTime < 500) {
+                Log.i(TAG, "IC.setComposingText: suppressed empty text after backtick");
                 return super.finishComposingText();
             }
             return super.setComposingText(text, newCursorPosition);
@@ -571,13 +578,16 @@ public class MainHook extends XposedModule {
 
         @Override
         public boolean commitText(CharSequence text, int newCursorPosition) {
+            Log.i(TAG, "IC.commitText: text=" + text + " pos=" + newCursorPosition);
             if (text != null && isAllBackticks(text)) {
                 sLastBacktickTime = System.currentTimeMillis();
-                boolean res = super.commitText(text, 1);
+                boolean res = super.commitText("`", 1);
                 super.finishComposingText();
+                Log.i(TAG, "IC.commitText: committed backtick, cursor forced to 1, res=" + res);
                 return res;
             }
             if ((text == null || text.length() == 0) && System.currentTimeMillis() - sLastBacktickTime < 500) {
+                Log.i(TAG, "IC.commitText: suppressed empty commit after backtick");
                 return super.finishComposingText();
             }
             return super.commitText(text, newCursorPosition);
@@ -585,7 +595,9 @@ public class MainHook extends XposedModule {
 
         @Override
         public boolean setSelection(int start, int end) {
+            Log.i(TAG, "IC.setSelection: start=" + start + " end=" + end + " (diff=" + (System.currentTimeMillis() - sLastBacktickTime) + ")");
             if (System.currentTimeMillis() - sLastBacktickTime < 500) {
+                Log.i(TAG, "IC.setSelection: suppressed selection change after backtick");
                 return true;
             }
             return super.setSelection(start, end);
@@ -593,9 +605,11 @@ public class MainHook extends XposedModule {
 
         @Override
         public boolean setComposingRegion(int start, int end) {
+            Log.i(TAG, "IC.setComposingRegion: start=" + start + " end=" + end);
             if (System.currentTimeMillis() - sLastBacktickTime < 500) {
                 try {
                     super.finishComposingText();
+                    Log.i(TAG, "IC.setComposingRegion: suppressed and finished composing after backtick");
                     return true;
                 } catch (Throwable ignored) {}
             }
@@ -605,7 +619,8 @@ public class MainHook extends XposedModule {
         private static boolean isAllBackticks(CharSequence cs) {
             if (cs == null || cs.length() == 0) return false;
             for (int i = 0; i < cs.length(); i++) {
-                if (cs.charAt(i) != '`') return false;
+                char c = cs.charAt(i);
+                if (c != '`' && c != '\u0300' && c != '\u02CB' && c != '\uFF40') return false;
             }
             return true;
         }
