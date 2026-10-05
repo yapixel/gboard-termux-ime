@@ -5,8 +5,10 @@ import android.inputmethodservice.InputMethodService;
 import android.provider.Settings;
 import android.text.InputType;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.InputMethodSubtype;
@@ -66,6 +68,7 @@ public class MainHook extends XposedModule {
             hookMethodIfDeclared(current, "onCurrentInputMethodSubtypeChanged", InputMethodSubtype.class);
             hookMethodIfDeclared(current, "switchInputMethod", String.class, InputMethodSubtype.class);
             hookMethodIfDeclared(current, "getCurrentInputEditorInfo");
+            hookMethodIfDeclared(current, "getCurrentInputConnection");
             hookMethodIfDeclared(current, "onFinishInput");
             hookMethodIfDeclared(current, "onWindowHidden");
             current = current.getSuperclass();
@@ -160,6 +163,12 @@ public class MainHook extends XposedModule {
                                 if (isTargetTerminalApp(info.packageName)) {
                                     spoofEditorInfoIfTerminal(info, chain.getThisObject(), false);
                                 }
+                            }
+                            return res;
+                        } else if ("getCurrentInputConnection".equals(name)) {
+                            Object res = chain.proceed();
+                            if (res instanceof InputConnection) {
+                                return wrapInputConnection((InputConnection) res);
                             }
                             return res;
                         } else if ("onFinishInput".equals(name)) {
@@ -515,6 +524,48 @@ public class MainHook extends XposedModule {
         if (isChinese && logVerbose) {
             Log.i(TAG, "Gboard: [CHINESE MODE] Restored EditorInfo for " + info.packageName
                     + " (" + getSubtypeDesc(subtype) + "): inputType=0x" + Integer.toHexString(info.inputType));
+        }
+    }
+
+    private static InputConnection wrapInputConnection(InputConnection ic) {
+        if (ic == null || ic instanceof SafeBacktickInputConnection) {
+            return ic;
+        }
+        return new SafeBacktickInputConnection(ic);
+    }
+
+    private static class SafeBacktickInputConnection extends InputConnectionWrapper {
+        public SafeBacktickInputConnection(InputConnection target) {
+            super(target, true);
+        }
+
+        @Override
+        public boolean sendKeyEvent(KeyEvent event) {
+            if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_GRAVE) {
+                if (event.getAction() == KeyEvent.ACTION_UP) {
+                    commitText("`", 1);
+                }
+                return true;
+            }
+            return super.sendKeyEvent(event);
+        }
+
+        @Override
+        public boolean setComposingText(CharSequence text, int newCursorPosition) {
+            if (text != null && isAllBackticks(text)) {
+                finishComposingText();
+                commitText(text, newCursorPosition);
+                return true;
+            }
+            return super.setComposingText(text, newCursorPosition);
+        }
+
+        private static boolean isAllBackticks(CharSequence cs) {
+            if (cs == null || cs.length() == 0) return false;
+            for (int i = 0; i < cs.length(); i++) {
+                if (cs.charAt(i) != '`') return false;
+            }
+            return true;
         }
     }
 }

@@ -11,4 +11,6 @@ assert "info.imeOptions = mOriginalImeOptions" in source
 assert "restartCurrentInput(service)" in source
 assert "!isTargetTerminalApp(pkg) && !mInTerminalSession" not in source
 assert "isTargetTerminalApp(info.packageName) || mInTerminalSession" not in source
+assert "SafeBacktickInputConnection" in source
+assert "KEYCODE_GRAVE" in source
 print("source checks passed")
