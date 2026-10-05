@@ -116,15 +116,16 @@ public class MainHook extends XposedModule {
                             Object thisObj = chain.getThisObject();
                             InputMethodService service = (thisObj instanceof InputMethodService)
                                     ? (InputMethodService) thisObj : null;
-                            if (service != null) {
+                            boolean shouldRestartTerminal = false;
+                            if (service != null && mInTerminalSession && !mTerminalExited) {
                                 EditorInfo currentInfo = service.getCurrentInputEditorInfo();
-                                if (currentInfo != null && (isTargetTerminalApp(currentInfo.packageName) || mInTerminalSession)) {
-                                    mInTerminalSession = true;
+                                if (currentInfo != null && isTargetTerminalApp(currentInfo.packageName)) {
                                     spoofEditorInfoIfTerminal(currentInfo, thisObj, true);
+                                    shouldRestartTerminal = true;
                                 }
                             }
                             Object result = chain.proceed();
-                            if (service != null && mInTerminalSession) {
+                            if (service != null && shouldRestartTerminal) {
                                 restartCurrentInput(service);
                             }
                             return result;
@@ -147,16 +148,8 @@ public class MainHook extends XposedModule {
                                 EditorInfo info = (EditorInfo) arg0;
                                 Object thisObj = chain.getThisObject();
                                 InputMethodService service = (thisObj instanceof InputMethodService) ? (InputMethodService) thisObj : null;
-                                if (isTargetTerminalApp(info.packageName) || mInTerminalSession) {
+                                if (isTargetTerminalApp(info.packageName)) {
                                     spoofEditorInfoIfTerminal(info, service, false);
-                                } else if (service != null && mLastNonTerminalSubtype != null) {
-                                    // 确保常规应用展示键盘视图时，输入法处于正确的外部语言
-                                    InputMethodSubtype cur = getCurrentSubtype(service);
-                                    if (!subtypesEqual(cur, mLastNonTerminalSubtype)) {
-                                        Log.i(TAG, "onStartInputView: ensuring non-terminal subtype: " + getSubtypeDesc(mLastNonTerminalSubtype));
-                                        switchToSubtype(service, mLastNonTerminalSubtype);
-                                        mLastSubtype = mLastNonTerminalSubtype;
-                                    }
                                 }
                             }
                             return chain.proceed();
@@ -164,7 +157,7 @@ public class MainHook extends XposedModule {
                             Object res = chain.proceed();
                             if (res instanceof EditorInfo) {
                                 EditorInfo info = (EditorInfo) res;
-                                if (isTargetTerminalApp(info.packageName) || mInTerminalSession) {
+                                if (isTargetTerminalApp(info.packageName)) {
                                     spoofEditorInfoIfTerminal(info, chain.getThisObject(), false);
                                 }
                             }
@@ -242,20 +235,20 @@ public class MainHook extends XposedModule {
             spoofEditorInfoIfTerminal(info, service, true);
         } else {
             // 目标为非终端常规应用（Telegram、Chrome 等）
+            boolean exitingTerminal = mInTerminalSession || mTerminalExited;
             mInTerminalSession = false;
             mTerminalExited = false;
 
-            if (service != null && mLastNonTerminalSubtype != null) {
+            if (exitingTerminal && service != null && mLastNonTerminalSubtype != null) {
                 InputMethodSubtype curSubtype = getCurrentSubtype(service);
                 if (!subtypesEqual(curSubtype, mLastNonTerminalSubtype)) {
                     Log.i(TAG, "Restoring preserved non-terminal subtype for " + currentPkg + ": " + getSubtypeDesc(mLastNonTerminalSubtype));
                     switchToSubtype(service, mLastNonTerminalSubtype);
                     mLastSubtype = mLastNonTerminalSubtype;
                 }
-            } else if (service != null) {
-                // 常规应用中当前语言记录为非终端快照
+            } else if (service != null && !mIsProgrammaticSwitch) {
                 InputMethodSubtype curSubtype = getCurrentSubtype(service);
-                if (curSubtype != null && !mIsProgrammaticSwitch) {
+                if (curSubtype != null) {
                     mLastNonTerminalSubtype = curSubtype;
                 }
             }
@@ -322,9 +315,6 @@ public class MainHook extends XposedModule {
     }
 
     private InputMethodSubtype getCurrentSubtype(InputMethodService service) {
-        if (mLastSubtype != null) {
-            return mLastSubtype;
-        }
         if (service != null) {
             try {
                 InputMethodManager imm = (InputMethodManager) service.getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -337,7 +327,7 @@ public class MainHook extends XposedModule {
                 }
             } catch (Throwable ignored) {}
         }
-        return null;
+        return mLastSubtype;
     }
 
     private InputMethodSubtype findEnglishSubtype(InputMethodService service) {
@@ -488,11 +478,11 @@ public class MainHook extends XposedModule {
     private void spoofEditorInfoIfTerminal(EditorInfo info, Object serviceObj, boolean logVerbose) {
         if (info == null) return;
         String pkg = info.packageName;
-        if (!isTargetTerminalApp(pkg) && !mInTerminalSession) {
+        if (!isTargetTerminalApp(pkg)) {
             return;
         }
 
-        if (pkg != null && isTargetTerminalApp(pkg) && !VIRTUAL_TERMINAL_PKG.equals(pkg)) {
+        if (!VIRTUAL_TERMINAL_PKG.equals(pkg)) {
             mOriginalTerminalPkg = pkg;
         }
 
