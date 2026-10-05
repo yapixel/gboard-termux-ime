@@ -16,6 +16,7 @@ if [[ -z "${ANDROID_HOME:-}" ]]; then
     fi
 
     docker run --rm \
+      --user "$(id -u):$(id -g)" \
       -v "$root":/workspace \
       -v /tmp/build_tools:/build_tools \
       -e VERSION_NAME="$version_name" \
