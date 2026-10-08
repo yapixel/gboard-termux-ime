@@ -5,10 +5,8 @@ import android.inputmethodservice.InputMethodService;
 import android.provider.Settings;
 import android.text.InputType;
 import android.util.Log;
-import android.view.KeyEvent;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
-import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.InputMethodSubtype;
@@ -68,7 +66,6 @@ public class MainHook extends XposedModule {
             hookMethodIfDeclared(current, "onCurrentInputMethodSubtypeChanged", InputMethodSubtype.class);
             hookMethodIfDeclared(current, "switchInputMethod", String.class, InputMethodSubtype.class);
             hookMethodIfDeclared(current, "getCurrentInputEditorInfo");
-            hookMethodIfDeclared(current, "getCurrentInputConnection");
             hookMethodIfDeclared(current, "onFinishInput");
             hookMethodIfDeclared(current, "onWindowHidden");
             current = current.getSuperclass();
@@ -163,14 +160,6 @@ public class MainHook extends XposedModule {
                                 if (isTargetTerminalApp(info.packageName)) {
                                     spoofEditorInfoIfTerminal(info, chain.getThisObject(), false);
                                 }
-                            }
-                            return res;
-                        } else if ("getCurrentInputConnection".equals(name)) {
-                            Object res = chain.proceed();
-                            Object thisObj = chain.getThisObject();
-                            if (res instanceof InputConnection && thisObj instanceof InputMethodService) {
-                                EditorInfo info = ((InputMethodService) thisObj).getCurrentInputEditorInfo();
-                                return wrapInputConnection((InputConnection) res, info);
                             }
                             return res;
                         } else if ("onFinishInput".equals(name)) {
@@ -528,119 +517,6 @@ public class MainHook extends XposedModule {
         if (isChinese && logVerbose) {
             Log.i(TAG, "Gboard: [CHINESE MODE] Restored EditorInfo for " + info.packageName
                     + " (" + getSubtypeDesc(subtype) + "): inputType=0x" + Integer.toHexString(info.inputType));
-        }
-    }
-
-    private static volatile SafeBacktickInputConnection sLastWrapper = null;
-
-    private static InputConnection wrapInputConnection(InputConnection ic, EditorInfo info) {
-        if (ic == null || ic instanceof SafeBacktickInputConnection) {
-            return ic;
-        }
-        // 终端（Termux 等）和 TYPE_NULL 编辑器依赖原始按键事件，不做任何改写
-        if (info == null || isTargetTerminalApp(info.packageName)
-                || (info.inputType & InputType.TYPE_MASK_CLASS) == InputType.TYPE_NULL) {
-            return ic;
-        }
-        // 同一个底层连接复用同一个包装器，避免 Gboard 按对象身份判断连接变化
-        SafeBacktickInputConnection wrapper = sLastWrapper;
-        if (wrapper == null || wrapper.mTarget != ic) {
-            wrapper = new SafeBacktickInputConnection(ic);
-            sLastWrapper = wrapper;
-            if (isIcDebug()) {
-                Log.d(TAG, "Wrapping InputConnection " + ic.getClass().getName() + " for " + info.packageName);
-            }
-        }
-        return wrapper;
-    }
-
-    // adb shell setprop log.tag.GboardTermuxIME DEBUG 开启；日志只记录长度和反引号码位，不记录输入内容
-    private static boolean isIcDebug() {
-        return Log.isLoggable(TAG, Log.DEBUG);
-    }
-
-    private static String describeText(CharSequence text) {
-        if (text == null) return "null";
-        StringBuilder sb = new StringBuilder("len=").append(text.length());
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c == '`' || c == '\u0300' || c == '\u02CB' || c == '\uFF40') {
-                sb.append(" U+").append(String.format("%04X", (int) c)).append('@').append(i);
-            }
-        }
-        return sb.toString();
-    }
-
-    private static class SafeBacktickInputConnection extends InputConnectionWrapper {
-        private static final int MODIFIER_META_MASK = KeyEvent.META_SHIFT_MASK | KeyEvent.META_ALT_MASK
-                | KeyEvent.META_CTRL_MASK | KeyEvent.META_META_MASK
-                | KeyEvent.META_SYM_ON | KeyEvent.META_FUNCTION_ON;
-
-        final InputConnection mTarget;
-        private boolean mGraveDownConsumed = false;
-
-        SafeBacktickInputConnection(InputConnection target) {
-            super(target, true);
-            mTarget = target;
-        }
-
-        @Override
-        public boolean sendKeyEvent(KeyEvent event) {
-            if (isIcDebug() && event != null) {
-                Log.d(TAG, "IC.sendKeyEvent: action=" + event.getAction() + " keyCode=" + event.getKeyCode()
-                        + " meta=0x" + Integer.toHexString(event.getMetaState()) + " deviceId=" + event.getDeviceId()
-                        + " repeat=" + event.getRepeatCount());
-            }
-            if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_GRAVE) {
-                // 不带修饰键的 GRAVE 直接作为文本提交，绕开 App 端 QwertyKeyListener 的死键组合
-                //（死键会插入 U+02CB 并把它选中，连按两次只剩一个字符）
-                if (event.getAction() == KeyEvent.ACTION_DOWN
-                        && (event.getMetaState() & MODIFIER_META_MASK) == 0) {
-                    mGraveDownConsumed = true;
-                    return super.commitText("`", 1);
-                }
-                if (event.getAction() == KeyEvent.ACTION_UP && mGraveDownConsumed) {
-                    mGraveDownConsumed = false;
-                    return true;
-                }
-            }
-            return super.sendKeyEvent(event);
-        }
-
-        @Override
-        public boolean commitText(CharSequence text, int newCursorPosition) {
-            if (isIcDebug()) {
-                Log.d(TAG, "IC.commitText: " + describeText(text) + " pos=" + newCursorPosition);
-            }
-            // newCursorPosition <= 0 会把光标放在提交文本之前（|`），单个反引号一律放到其后
-            if (newCursorPosition <= 0 && text != null && text.length() == 1 && text.charAt(0) == '`') {
-                newCursorPosition = 1;
-            }
-            return super.commitText(text, newCursorPosition);
-        }
-
-        @Override
-        public boolean setComposingText(CharSequence text, int newCursorPosition) {
-            if (isIcDebug()) {
-                Log.d(TAG, "IC.setComposingText: " + describeText(text) + " pos=" + newCursorPosition);
-            }
-            return super.setComposingText(text, newCursorPosition);
-        }
-
-        @Override
-        public boolean setSelection(int start, int end) {
-            if (isIcDebug()) {
-                Log.d(TAG, "IC.setSelection: start=" + start + " end=" + end);
-            }
-            return super.setSelection(start, end);
-        }
-
-        @Override
-        public boolean setComposingRegion(int start, int end) {
-            if (isIcDebug()) {
-                Log.d(TAG, "IC.setComposingRegion: start=" + start + " end=" + end);
-            }
-            return super.setComposingRegion(start, end);
         }
     }
 }
