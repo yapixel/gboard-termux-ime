@@ -15,6 +15,11 @@ assert "SafeBacktickInputConnection" in source
 assert "KEYCODE_GRAVE" in source
 assert 'super.commitText("`", 1)' in source
 assert "super.commitText(text, newCursorPosition)" in source
-assert "sLastBacktickTime < 500" in source
-assert "KEYCODE_DPAD_LEFT" in source
+assert "sLastBacktickTime" not in source
+assert "KEYCODE_DPAD_LEFT" not in source
+assert "isAllBackticks" not in source
+assert "MODIFIER_META_MASK) == 0" in source
+assert "isTargetTerminalApp(info.packageName)" in source
+assert "Log.isLoggable(TAG, Log.DEBUG)" in source
+assert 'Log.i(TAG, "IC.' not in source
 print("source checks passed")
