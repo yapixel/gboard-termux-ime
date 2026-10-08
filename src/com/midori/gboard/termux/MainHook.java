@@ -167,8 +167,10 @@ public class MainHook extends XposedModule {
                             return res;
                         } else if ("getCurrentInputConnection".equals(name)) {
                             Object res = chain.proceed();
-                            if (res instanceof InputConnection) {
-                                return wrapInputConnection((InputConnection) res);
+                            Object thisObj = chain.getThisObject();
+                            if (res instanceof InputConnection && thisObj instanceof InputMethodService) {
+                                EditorInfo info = ((InputMethodService) thisObj).getCurrentInputEditorInfo();
+                                return wrapInputConnection((InputConnection) res, info);
                             }
                             return res;
                         } else if ("onFinishInput".equals(name)) {
@@ -529,34 +531,76 @@ public class MainHook extends XposedModule {
         }
     }
 
-    private static InputConnection wrapInputConnection(InputConnection ic) {
+    private static volatile SafeBacktickInputConnection sLastWrapper = null;
+
+    private static InputConnection wrapInputConnection(InputConnection ic, EditorInfo info) {
         if (ic == null || ic instanceof SafeBacktickInputConnection) {
             return ic;
         }
-        Log.i(TAG, "Wrapping InputConnection: " + ic.getClass().getName());
-        return new SafeBacktickInputConnection(ic);
+        // 终端（Termux 等）和 TYPE_NULL 编辑器依赖原始按键事件，不做任何改写
+        if (info == null || isTargetTerminalApp(info.packageName)
+                || (info.inputType & InputType.TYPE_MASK_CLASS) == InputType.TYPE_NULL) {
+            return ic;
+        }
+        // 同一个底层连接复用同一个包装器，避免 Gboard 按对象身份判断连接变化
+        SafeBacktickInputConnection wrapper = sLastWrapper;
+        if (wrapper == null || wrapper.mTarget != ic) {
+            wrapper = new SafeBacktickInputConnection(ic);
+            sLastWrapper = wrapper;
+            if (isIcDebug()) {
+                Log.d(TAG, "Wrapping InputConnection " + ic.getClass().getName() + " for " + info.packageName);
+            }
+        }
+        return wrapper;
+    }
+
+    // adb shell setprop log.tag.GboardTermuxIME DEBUG 开启；日志只记录长度和反引号码位，不记录输入内容
+    private static boolean isIcDebug() {
+        return Log.isLoggable(TAG, Log.DEBUG);
+    }
+
+    private static String describeText(CharSequence text) {
+        if (text == null) return "null";
+        StringBuilder sb = new StringBuilder("len=").append(text.length());
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '`' || c == '\u0300' || c == '\u02CB' || c == '\uFF40') {
+                sb.append(" U+").append(String.format("%04X", (int) c)).append('@').append(i);
+            }
+        }
+        return sb.toString();
     }
 
     private static class SafeBacktickInputConnection extends InputConnectionWrapper {
-        private static volatile long sLastBacktickTime = 0;
+        private static final int MODIFIER_META_MASK = KeyEvent.META_SHIFT_MASK | KeyEvent.META_ALT_MASK
+                | KeyEvent.META_CTRL_MASK | KeyEvent.META_META_MASK
+                | KeyEvent.META_SYM_ON | KeyEvent.META_FUNCTION_ON;
 
-        public SafeBacktickInputConnection(InputConnection target) {
+        final InputConnection mTarget;
+        private boolean mGraveDownConsumed = false;
+
+        SafeBacktickInputConnection(InputConnection target) {
             super(target, true);
+            mTarget = target;
         }
 
         @Override
         public boolean sendKeyEvent(KeyEvent event) {
-            Log.i(TAG, "IC.sendKeyEvent: " + event);
-            if (event != null) {
-                if (event.getKeyCode() == KeyEvent.KEYCODE_GRAVE) {
-                    if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                        commitText("`", 1);
-                    }
-                    return true;
+            if (isIcDebug() && event != null) {
+                Log.d(TAG, "IC.sendKeyEvent: action=" + event.getAction() + " keyCode=" + event.getKeyCode()
+                        + " meta=0x" + Integer.toHexString(event.getMetaState()) + " deviceId=" + event.getDeviceId()
+                        + " repeat=" + event.getRepeatCount());
+            }
+            if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_GRAVE) {
+                // 不带修饰键的 GRAVE 直接作为文本提交，绕开 App 端 QwertyKeyListener 的死键组合
+                //（死键会插入 U+02CB 并把它选中，连按两次只剩一个字符）
+                if (event.getAction() == KeyEvent.ACTION_DOWN
+                        && (event.getMetaState() & MODIFIER_META_MASK) == 0) {
+                    mGraveDownConsumed = true;
+                    return super.commitText("`", 1);
                 }
-                if (event.getKeyCode() == KeyEvent.KEYCODE_DPAD_LEFT
-                        && System.currentTimeMillis() - sLastBacktickTime < 500) {
-                    Log.i(TAG, "IC.sendKeyEvent: suppressed DPAD_LEFT after backtick");
+                if (event.getAction() == KeyEvent.ACTION_UP && mGraveDownConsumed) {
+                    mGraveDownConsumed = false;
                     return true;
                 }
             }
@@ -564,65 +608,39 @@ public class MainHook extends XposedModule {
         }
 
         @Override
-        public boolean setComposingText(CharSequence text, int newCursorPosition) {
-            Log.i(TAG, "IC.setComposingText: text=" + text + " pos=" + newCursorPosition);
-            if (text != null && isAllBackticks(text)) {
-                return commitText("`", 1);
-            }
-            if ((text == null || text.length() == 0) && System.currentTimeMillis() - sLastBacktickTime < 500) {
-                Log.i(TAG, "IC.setComposingText: suppressed empty text after backtick");
-                return super.finishComposingText();
-            }
-            return super.setComposingText(text, newCursorPosition);
-        }
-
-        @Override
         public boolean commitText(CharSequence text, int newCursorPosition) {
-            Log.i(TAG, "IC.commitText: text=" + text + " pos=" + newCursorPosition);
-            if (text != null && isAllBackticks(text)) {
-                sLastBacktickTime = System.currentTimeMillis();
-                boolean res = super.commitText("`", 1);
-                super.finishComposingText();
-                Log.i(TAG, "IC.commitText: committed backtick, cursor forced to 1, res=" + res);
-                return res;
+            if (isIcDebug()) {
+                Log.d(TAG, "IC.commitText: " + describeText(text) + " pos=" + newCursorPosition);
             }
-            if ((text == null || text.length() == 0) && System.currentTimeMillis() - sLastBacktickTime < 500) {
-                Log.i(TAG, "IC.commitText: suppressed empty commit after backtick");
-                return super.finishComposingText();
+            // newCursorPosition <= 0 会把光标放在提交文本之前（|`），单个反引号一律放到其后
+            if (newCursorPosition <= 0 && text != null && text.length() == 1 && text.charAt(0) == '`') {
+                newCursorPosition = 1;
             }
             return super.commitText(text, newCursorPosition);
         }
 
         @Override
+        public boolean setComposingText(CharSequence text, int newCursorPosition) {
+            if (isIcDebug()) {
+                Log.d(TAG, "IC.setComposingText: " + describeText(text) + " pos=" + newCursorPosition);
+            }
+            return super.setComposingText(text, newCursorPosition);
+        }
+
+        @Override
         public boolean setSelection(int start, int end) {
-            Log.i(TAG, "IC.setSelection: start=" + start + " end=" + end + " (diff=" + (System.currentTimeMillis() - sLastBacktickTime) + ")");
-            if (System.currentTimeMillis() - sLastBacktickTime < 500) {
-                Log.i(TAG, "IC.setSelection: suppressed selection change after backtick");
-                return true;
+            if (isIcDebug()) {
+                Log.d(TAG, "IC.setSelection: start=" + start + " end=" + end);
             }
             return super.setSelection(start, end);
         }
 
         @Override
         public boolean setComposingRegion(int start, int end) {
-            Log.i(TAG, "IC.setComposingRegion: start=" + start + " end=" + end);
-            if (System.currentTimeMillis() - sLastBacktickTime < 500) {
-                try {
-                    super.finishComposingText();
-                    Log.i(TAG, "IC.setComposingRegion: suppressed and finished composing after backtick");
-                    return true;
-                } catch (Throwable ignored) {}
+            if (isIcDebug()) {
+                Log.d(TAG, "IC.setComposingRegion: start=" + start + " end=" + end);
             }
             return super.setComposingRegion(start, end);
-        }
-
-        private static boolean isAllBackticks(CharSequence cs) {
-            if (cs == null || cs.length() == 0) return false;
-            for (int i = 0; i < cs.length(); i++) {
-                char c = cs.charAt(i);
-                if (c != '`' && c != '\u0300' && c != '\u02CB' && c != '\uFF40') return false;
-            }
-            return true;
         }
     }
 }
